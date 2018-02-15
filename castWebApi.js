@@ -1,4 +1,3 @@
-
 console.logBase = console.log.bind(console);
 
 (function(o){
@@ -18,6 +17,8 @@ console.logBase = console.log.bind(console);
 })(console);
 
 const http = require('http');
+const https = require('https');
+const querystring = require('querystring');
 const Client = require('castv2').Client;
 const Castv2Client = require('castv2-client').Client;
 const DefaultMediaReceiver = require('castv2-client').DefaultMediaReceiver;
@@ -26,13 +27,23 @@ const url = require('url');
 const debug = require('debug')('cast-web-api');
 const args = require('minimist')(process.argv.slice(2));
 const fetch = require('node-fetch');
+const os = require('os');
+
 var hostname = '127.0.0.1';
 var port = 3000;
 var currentRequestId = 1;
 var networkTimeout = 2000;
 var discoveryTimeout = 4000;
 var appLoadTimeout = 6000;
-var thisVersion = '0.2.2';
+var thisVersion = '0.2.3';
+
+
+var refreshInterval = 15;
+var refreshUrl = null;
+var statusTimer = null;
+var deviceStatusArray = [];
+var deviceArray = [];
+var mediaStatusArray = [];
 
 interpretArguments();
 createWebServer();
@@ -40,6 +51,9 @@ createWebServer();
 //HANDLE ARGUMENTS
 function interpretArguments() {
 	debug('Args: %s', JSON.stringify(args));
+	if (getNetworkIp()) {
+		hostname = getNetworkIp();
+	}
 	if (args.hostname) {
 		hostname = args.hostname;
 	}
@@ -58,7 +72,160 @@ function interpretArguments() {
 	if (args.currentRequestId) {
 		currentRequestId = args.currentRequestId;
 	}
+	if (args.refreshUrl) {
+		refreshUrl = args.refreshUrl;
+	}
+	if (args.refreshurl) {
+		refreshUrl = args.refreshurl;
+	}
+	if (args.refreshInterval) {
+		refeshInterval = args.refeshInterval;
+	}
+	if (args.refreshinterval) {
+		refreshInterval = args.refreshinterval;
+	}
+	if (refreshUrl) {
+		var timerWait = 15000;
+		try {
+			if (!isNaN(refreshInterval))
+				timerWait = refreshInterval * 1000;
+		}
+		catch (e) {
+			console.log("Unable to parse refreshInterval (" + refreshInterval + ")");
+		}
+		statusTimer = setInterval(checkStatus, timerWait);
+	}
 }
+
+
+function updateMediaStatus(checkDev, dev, sessionId)
+{
+	getMediaStatus(checkDev, sessionId)
+	.then(mediaStatus => {
+		if (mediaStatus) {
+			var indx = deviceArray.indexOf(checkDev);
+			var medStatus = JSON.parse(mediaStatus);
+			var newStatus = JSON.parse(mediaStatus);
+			delete newStatus.requestId;
+			var newStatus = JSON.stringify(newStatus);
+			if (mediaStatusArray[indx] != newStatus) {
+				mediaStatusArray[indx] = newStatus;
+				debug("getMediaStatus checkdev = " + checkDev + ", indx = " + indx + ", newStatus = " + mediaStatusArray[indx] );
+				var post_data = querystring.stringify({
+					'devicename' : dev.deviceName,
+					'mediastatus': mediaStatus
+				});
+
+				var sm = url.parse(refreshUrl)
+				var post_options = {
+					host: sm.hostname,
+					port: sm.port,
+					path: sm.path,
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/x-www-form-urlencoded',
+						'Content-Length': Buffer.byteLength(post_data)
+					}
+				};
+
+				var post_req = https.request(post_options, function(res) {
+					res.setEncoding('utf8');
+					res.on('data', function (chunk) {
+					});
+				});
+				post_req.write(post_data);
+				post_req.end();
+			}
+		}
+	});
+}
+
+function updateDeviceStatus(checkDev, dev)
+{
+	getDeviceStatus(checkDev)
+	.then(deviceStatus => {
+		if (deviceStatus) {
+			if (deviceArray.indexOf(checkDev) == -1) {
+				deviceArray.push(checkDev);
+				deviceStatusArray.push("");
+				mediaStatusArray.push("");
+			}
+			var indx = deviceArray.indexOf(checkDev);
+			var devStatus = JSON.parse(deviceStatus);
+			var newStatus = JSON.parse(deviceStatus);
+			delete newStatus.requestId;
+			var newStatus = JSON.stringify(newStatus);
+			if (deviceStatusArray[indx] != newStatus) {
+				deviceStatusArray[indx] = newStatus;
+				debug("getDeviceStatus checkdev = " + checkDev + ", indx = " + indx + ", newStatus = " + deviceStatusArray[indx])
+				var post_data = querystring.stringify({
+					'devicename' : dev.deviceName,
+					'devicestatus': deviceStatus
+				});
+
+				var sm = url.parse(refreshUrl)
+				var post_options = {
+					host: sm.hostname,
+					port: sm.port,
+					path: sm.path,
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/x-www-form-urlencoded',
+						'Content-Length': Buffer.byteLength(post_data)
+					}
+				};
+
+				var post_req = https.request(post_options, function(res) {
+					res.setEncoding('utf8');
+					res.on('data', function (chunk) {
+					});
+				});
+				post_req.write(post_data);
+				post_req.end();
+			}
+			else {
+				if (devStatus.status.applications && devStatus.status.applications[0].sessionId) {
+					debug("sessionId => " + devStatus.status.applications[0].sessionId);
+					updateMediaStatus(checkDev, dev, devStatus.status.applications[0].sessionId);
+				}
+			}
+		}
+	});
+}
+
+function checkStatus()
+{
+	console.log("checkStatus");
+	getDevices().then(devices => {
+		if (devices) {
+			var dev = JSON.parse(devices)
+			for (x in dev) {
+				if (dev[x].deviceAddress && dev[x].devicePort) {
+					var checkDev = dev[x].deviceAddress+":"+dev[x].devicePort;
+					updateDeviceStatus(checkDev,dev[x]);
+				}
+			} 
+		}
+	});
+}
+
+//GET NETWORK IP
+function getNetworkIp() {
+	var interfaces = os.networkInterfaces();
+	var addresses = [];
+	for (var k in interfaces) {
+		for (var k2 in interfaces[k]) {
+			var address = interfaces[k][k2];
+			if (address.family === 'IPv4' && !address.internal) {
+				addresses.push(address.address);
+			}
+		}
+	}
+
+	debug('getNetworkIp, addresses: ' + addresses);
+	return addresses[0];
+}
+
 
 //WEBSERVER
 function createWebServer() {
@@ -216,11 +383,13 @@ function createWebServer() {
 			}
 		}
 
-		else if (parsedUrl['pathname']=="/setMediaPlayback") {
+		else if (parsedUrl['pathname']=="/setMediaPlayback" || parsedUrl['pathname']=="/setMediaPlaybackShort") {
+			var short = false;
+			if (parsedUrl['pathname']=="/setMediaPlaybackShort") { short = true; }
 			res.statusCode = 200;
 			res.setHeader('Content-Type', 'application/json; charset=utf-8');
 			if (parsedUrl['query']['address'] && parsedUrl['query']['mediaType'] && parsedUrl['query']['mediaUrl'] && parsedUrl['query']['mediaStreamType'] && parsedUrl['query']['mediaTitle'] && parsedUrl['query']['mediaSubtitle'] && parsedUrl['query']['mediaImageUrl']) {
-				setMediaPlayback(parsedUrl['query']['address'], parsedUrl['query']['mediaType'], parsedUrl['query']['mediaUrl'], parsedUrl['query']['mediaStreamType'], parsedUrl['query']['mediaTitle'], parsedUrl['query']['mediaSubtitle'], parsedUrl['query']['mediaImageUrl']).then(mediaStatus => {
+				setMediaPlayback(parsedUrl['query']['address'], parsedUrl['query']['mediaType'], parsedUrl['query']['mediaUrl'], parsedUrl['query']['mediaStreamType'], parsedUrl['query']['mediaTitle'], parsedUrl['query']['mediaSubtitle'], parsedUrl['query']['mediaImageUrl'], short).then(mediaStatus => {
 					if (mediaStatus) {
 						res.statusCode = 200;
 						res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -652,7 +821,7 @@ function setDevicePlaybackStop(address, sId) {
 	});
 }
 
-function setMediaPlayback(address, mediaType, mediaUrl, mediaStreamType, mediaTitle, mediaSubtitle, mediaImageUrl) {
+function setMediaPlayback(address, mediaType, mediaUrl, mediaStreamType, mediaTitle, mediaSubtitle, mediaImageUrl, short) {
 	return new Promise(resolve => {
 		var castv2Client = new Castv2Client();
 
@@ -675,28 +844,38 @@ function setMediaPlayback(address, mediaType, mediaUrl, mediaStreamType, mediaTi
 			   	};
 
 			  	player.load(media, { autoplay: true }, function(err, status) {
-			      	try{debug('Media loaded playerState: ', status.playerState);}
+			      	try{ 
+			      		debug('Media loaded playerState: ', status.playerState);
+			      		if (short==true) {
+			      			mediaStatus = JSON.stringify(status);
+			      			resolve(mediaStatus);
+			      		}
+			      	}
 			      	catch(e){
 			      		handleException(e);
 			      		try{player.close();}catch(e){handleException(e);}
 			      	}
 			    });
 
-			    player.on('status', function(status) {
-			        debug('status.playerState: ', status.playerState);
-			        if (status.playerState=='PLAYING') {
-			        	debug('status.playerState is PLAYING');
-			        	if (player.session.sessionId) {
-					  		console.log('Player has sessionId: ', player.session.sessionId);
-
-					  		getMediaStatus(address, player.session.sessionId).then(mediaStatus => {
-					    		debug('getMediaStatus return value: ', mediaStatus);
-					    		resolve(mediaStatus);
-							});
-					  	}
-			        }
+		  		player.on('status', function(status) {
+		  			if (status) {
+		  				debug('status.playerState: ', status.playerState);
+				        if (status.playerState=='PLAYING') {
+				        	debug('status.playerState is PLAYING');
+				        	if (player.session.sessionId) {
+						  		console.log('Player has sessionId: ', player.session.sessionId);
+						  		if (short==false) {
+					      			getMediaStatus(address, player.session.sessionId).then(mediaStatus => {
+							    		debug('getMediaStatus return value: ', mediaStatus);
+							    		resolve(mediaStatus);
+									});
+					      		}
+						  	}
+				        }
+		  			}
 			   	});
-			
+			  	
+
 			    setTimeout(() => {
 			    	closeClient(castv2Client);
 			    	resolve(null);
