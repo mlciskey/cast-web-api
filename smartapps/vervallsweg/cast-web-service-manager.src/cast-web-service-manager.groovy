@@ -72,6 +72,18 @@ def mainPage() {
         	}
         }
         else {
+	        section("Authorization") {
+    	        paragraph "OAuth must be enabled to show webhook url."
+            }
+        }
+        section("Installed Devices"){
+            def dMap = [:]
+            getChildDevices().sort({ a, b -> a["label"] <=> b["label"] }).each {
+                href "configureDevicePage", title:"$it.label", description:"", params: [dni: it.deviceNetworkId]
+            }
+        }
+    }
+}
 
 def checkApiConnectionPage() {
     dynamicPage(name:"checkApiConnectionPage", title:"Test API connection", nextPage: "mainPage", refreshInterval:10) {
