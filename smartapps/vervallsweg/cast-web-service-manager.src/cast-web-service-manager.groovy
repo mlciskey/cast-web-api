@@ -42,7 +42,12 @@ preferences {
 def mainPage() {
     restartHealthCheck()
     if (!state.accessToken) {
+    	try {
         createAccessToken()
+        }
+        catch (e) {
+        	logger('debug', "Unable to create token")
+        }
     }
     dynamicPage(name: "mainPage", title: "Manage your Cast devices", nextPage: null, uninstall: true, install: true) {
         section([mobileOnly:true]) {
@@ -60,18 +65,13 @@ def mainPage() {
             href "healthCheckPage", title: "Health check", description:""
             href(name: "presetGenerator",title: "Preset generator",required: false,style: "external",url: "https://vervallsweg.github.io/smartthings/cast-web-preset-generator/preset-generator.html",description: "")
         }
-        section("Authorization") {
-            paragraph "View this SmartApp's configuration to use it in other places."
-            href url:"${apiServerUrl("/api/smartapps/installations/${app.id}/config?access_token=${state.accessToken}")}", style:"embedded", required:false, title:"Config", description:"Tap, select, copy, then click \"Done\""
+        if (state.accessToken) {
+	        section("Authorization") {
+    	        paragraph "View this SmartApp's configuration to use it in other places."
+        	    href url:"${apiServerUrl("/api/smartapps/installations/${app.id}/config?access_token=${state.accessToken}")}", style:"embedded", required:false, title:"Config", description:"Tap, select, copy, then click \"Done\""
+        	}
         }
-        section("Installed Devices"){
-            def dMap = [:]
-            getChildDevices().sort({ a, b -> a["label"] <=> b["label"] }).each {
-                href "configureDevicePage", title:"$it.label", description:"", params: [dni: it.deviceNetworkId]
-            }
-        }
-    }
-}
+        else {
 
 def checkApiConnectionPage() {
     dynamicPage(name:"checkApiConnectionPage", title:"Test API connection", nextPage: "mainPage", refreshInterval:10) {
